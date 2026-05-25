@@ -51,10 +51,10 @@ class AccountMoveLine(models.Model):
         store=False,
     )
 
-    @api.depends('move_id.type')
+    @api.depends('move_id.move_type')
     def _compute_parent_type_tax_use_filter(self):
         for line in self:
-            move_type = line.move_id.type or 'out_invoice'
+            move_type = line.move_id.move_type or 'out_invoice'
             if move_type in ('out_invoice', 'out_refund', 'out_receipt'):
                 line.parent_type_tax_use_filter = 'sale'
             elif move_type in ('in_invoice', 'in_refund', 'in_receipt'):
