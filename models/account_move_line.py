@@ -1,29 +1,17 @@
 # -*- coding: utf-8 -*-
+import logging
 from odoo import api, fields, models, _
 from odoo.exceptions import ValidationError, UserError
+
+_logger = logging.getLogger(__name__)
 
 
 class AccountMoveLine(models.Model):
     _inherit = 'account.move.line'
 
-    # ==========================================================================
-    # DESIGN (Odoo 14)
-    # ==========================================================================
-    # - tax_ids: Native Odoo field. Visible as the standard "Taxes" column.
-    #            Behaves exactly like vanilla Odoo. Never polluted by Tax 2.
-    # - tax2_ids: New Many2many to account.tax. Visible as the "Tax 2" column.
-    #             Computed by Odoo together with tax_ids but stored separately.
-    #
-    # Computation hooks:
-    # 1. _get_price_total_and_subtotal (line-level totals)
-    #    -> we pass tax_ids | tax2_ids as the `taxes` argument so price_total
-    #       includes both taxes.
-    # 2. _recompute_tax_lines (move-level: generates tax journal lines)
-    #    -> we temporarily expose tax2_ids alongside tax_ids during the super
-    #       call, then restore. Uses an in-memory cache + try/finally to be
-    #       robust against exceptions.
-    # ==========================================================================
-
+    # =====================================================================
+    # Field
+    # =====================================================================
     tax2_ids = fields.Many2many(
         comodel_name='account.tax',
         relation='account_move_line_tax2_rel',
@@ -33,14 +21,12 @@ class AccountMoveLine(models.Model):
         domain="[('type_tax_use','=', parent_type_tax_use_filter),"
                " ('company_id','=', company_id)]",
         check_company=True,
-        help="Optional secondary tax for this line. Computed by Odoo together "
-             "with the standard Taxes (tax_ids) but displayed in its own column.",
+        help="Secondary tax applied to this invoice line in addition to the "
+             "standard Taxes field. Computed by Odoo as a real account.tax.",
     )
 
-    # Helper to filter the tax selection by sale/purchase context.
     parent_type_tax_use_filter = fields.Char(
-        compute='_compute_parent_type_tax_use_filter',
-        store=False,
+        compute='_compute_parent_type_tax_use_filter', store=False,
     )
 
     @api.depends('move_id.move_type')
@@ -54,9 +40,9 @@ class AccountMoveLine(models.Model):
             else:
                 line.parent_type_tax_use_filter = 'none'
 
-    # ------------------------------------------------------------------
+    # =====================================================================
     # Constraints
-    # ------------------------------------------------------------------
+    # =====================================================================
     @api.constrains('tax_ids', 'tax2_ids')
     def _check_no_duplicate_tax2(self):
         for line in self:
@@ -67,9 +53,14 @@ class AccountMoveLine(models.Model):
                     "and the Tax 2 column on the same invoice line."
                 ) % dup[0].display_name)
 
-    # ------------------------------------------------------------------
-    # Onchange: duplicate prevention + trigger recompute when Tax 2 changes
-    # ------------------------------------------------------------------
+    # =====================================================================
+    # Onchange: mark line for tax recomputation when Tax 2 changes
+    # =====================================================================
+    # _onchange_mark_recompute_taxes (native) watches `tax_ids` and sets
+    # recompute_tax_line = True. Without an equivalent for tax2_ids the move's
+    # _recompute_dynamic_lines() refuses to call _recompute_tax_lines() and
+    # therefore no tax journal lines are created for Tax 2.
+    # =====================================================================
     @api.onchange('tax2_ids')
     def _onchange_tax2_ids(self):
         for line in self:
@@ -80,45 +71,38 @@ class AccountMoveLine(models.Model):
                     'warning': {
                         'title': _('Duplicate Tax'),
                         'message': _(
-                            "Tax '%s' is already in the Taxes column. "
+                            "Tax '%s' is already selected in the Taxes column. "
                             "It has been removed from Tax 2."
                         ) % dup[0].display_name,
                     }
                 }
-            # Force re-evaluation of price_total/price_subtotal so the
-            # in-form totals reflect Tax 2 immediately.
-            line._onchange_price_subtotal()
+            # Mark the line so that _recompute_dynamic_lines triggers
+            # _recompute_tax_lines on the parent move (same mechanism Odoo
+            # uses when the native tax_ids field changes).
+            if not line.tax_repartition_line_id:
+                line.recompute_tax_line = True
 
-    # ------------------------------------------------------------------
-    # Line-level tax computation: include Tax 2 in price_total
-    # ------------------------------------------------------------------
+    # =====================================================================
+    # Line-level price_total: include Tax 2 so the line subtotal/total
+    # displayed in the row reflects both taxes.
+    # =====================================================================
     def _get_price_total_and_subtotal(self, price_unit=None, quantity=None,
                                       discount=None, currency=None,
                                       product=None, partner=None, taxes=None,
                                       move_type=None):
-        """Make price_total include Tax 2.
-
-        Odoo passes `taxes=self.tax_ids` when called from internal helpers
-        and may also pass it explicitly. In either case, we extend the
-        recordset with self.tax2_ids before delegating to super.
-        """
         self.ensure_one()
+        effective = taxes if taxes is not None else self.tax_ids
         if self.tax2_ids:
-            effective = (taxes if taxes is not None else self.tax_ids) | self.tax2_ids
-            return super(AccountMoveLine, self)._get_price_total_and_subtotal(
-                price_unit=price_unit, quantity=quantity, discount=discount,
-                currency=currency, product=product, partner=partner,
-                taxes=effective, move_type=move_type,
-            )
+            effective = effective | self.tax2_ids
         return super(AccountMoveLine, self)._get_price_total_and_subtotal(
             price_unit=price_unit, quantity=quantity, discount=discount,
             currency=currency, product=product, partner=partner,
-            taxes=taxes, move_type=move_type,
+            taxes=effective, move_type=move_type,
         )
 
-    # ------------------------------------------------------------------
-    # Posted invoice protection for Tax 2 modifications
-    # ------------------------------------------------------------------
+    # =====================================================================
+    # Posted invoice protection: forbid changing Tax 2 after post.
+    # =====================================================================
     def write(self, vals):
         if 'tax2_ids' in vals:
             for line in self:
@@ -133,50 +117,59 @@ class AccountMoveLine(models.Model):
 class AccountMove(models.Model):
     _inherit = 'account.move'
 
-    # ==========================================================================
-    # Move-level: ensure Tax 2 generates real account.tax journal lines.
-    # ==========================================================================
-    # _recompute_tax_lines is the method Odoo 14 uses to (re)build the dynamic
-    # tax lines inside line_ids. It iterates self.line_ids and reads
-    # line.tax_ids to call account.tax.compute_all() per line.
+    # =====================================================================
+    # CORE FIX: override _recompute_tax_lines so Tax 2 produces real tax
+    # journal lines (lines with tax_line_id set). _compute_amount sums those
+    # lines into amount_tax / amount_total, and the totals area on the form
+    # reads amount_by_group from the same tax lines.
     #
-    # We temporarily merge tax2_ids into tax_ids on a per-line basis, call
-    # super, then restore. Uses a try/finally so the restore always runs.
-    # Recursion is prevented via a context flag.
-    # ==========================================================================
+    # Strategy (verified against odoo/14.0 account/models/account_move.py):
+    #   * For each base line that has tax2_ids, temporarily set
+    #     line.tax_ids = tax_ids | tax2_ids via direct field assignment.
+    #     - In draft/onchange mode (NewId records) this only updates the
+    #       in-memory cache, so no DB pollution happens at all.
+    #     - In persisted mode this writes to the DB, and we restore it in a
+    #       try/finally so the final stored value is again Tax 1 only.
+    #   * Call super(). Odoo iterates `self.line_ids`, sees the merged
+    #     tax_ids, calls account.tax.compute_all() and creates the proper
+    #     tax_repartition_line records (one per tax).
+    #   * In `finally`, restore the original tax_ids of each affected line.
+    #   * A context flag prevents re-entry / recursion.
+    # =====================================================================
 
     def _recompute_tax_lines(self, *args, **kwargs):
         if self.env.context.get('_tax2_merge_in_progress'):
             return super()._recompute_tax_lines(*args, **kwargs)
 
-        # Identify lines that have a Tax 2 and snapshot their original tax_ids.
-        # We use direct SQL-free ORM writes with sudo to avoid permission issues
-        # during the temporary merge.
-        merged_lines = self.line_ids.filtered(lambda l: l.tax2_ids)
-        original_by_id = {l.id: l.tax_ids.ids for l in merged_lines}
+        # Collect lines that have a Tax 2 to merge.
+        affected = self.line_ids.filtered(
+            lambda l: not l.tax_repartition_line_id and l.tax2_ids
+        )
+        backup = {l.id: l.tax_ids for l in affected}
 
         try:
-            # Step 1: merge tax2_ids into tax_ids on each affected line.
-            for line in merged_lines:
-                effective_ids = list(
-                    set(line.tax_ids.ids) | set(line.tax2_ids.ids)
+            for line in affected:
+                merged = line.tax_ids | line.tax2_ids
+                # Direct field assignment: works for NewId (in-memory cache)
+                # and for persisted records. Wrapped in a context flag so the
+                # downstream onchanges do not re-enter this method.
+                line.with_context(_tax2_merge_in_progress=True).tax_ids = merged
+                _logger.debug(
+                    "tax2_merge: line %s tax_ids %s -> %s (added %s)",
+                    line.id, backup[line.id].mapped('name'),
+                    merged.mapped('name'), line.tax2_ids.mapped('name'),
                 )
-                line.sudo().with_context(
-                    _tax2_merge_in_progress=True
-                ).write({'tax_ids': [(6, 0, effective_ids)]})
 
-            # Step 2: let Odoo build the tax journal lines normally.
             result = super(
                 AccountMove,
                 self.with_context(_tax2_merge_in_progress=True),
             )._recompute_tax_lines(*args, **kwargs)
         finally:
-            # Step 3: always restore tax_ids to its original Tax-1-only state.
-            for line_id, original_ids in original_by_id.items():
-                line = self.env['account.move.line'].browse(line_id)
+            # Restore the original Tax 1 only state on each affected line.
+            for line in affected:
                 if line.exists():
-                    line.sudo().with_context(
+                    line.with_context(
                         _tax2_merge_in_progress=True
-                    ).write({'tax_ids': [(6, 0, original_ids)]})
+                    ).tax_ids = backup[line.id]
 
         return result

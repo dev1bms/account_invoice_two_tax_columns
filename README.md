@@ -30,10 +30,29 @@ Computation hooks (read-only union, no permanent merge):
 
 ### Why this design?
 
-Odoo 14's tax engine only reads `tax_ids`. We must therefore include Tax 2
-in `tax_ids` during the actual calculation — but only during the calculation.
-After every computation, `tax_ids` is restored to contain only Tax 1, so:
+Odoo 14 builds the **real tax journal lines** in
+`account.move._recompute_tax_lines()` by iterating `self.line_ids` and
+calling `account.tax.compute_all(...)` on `line.tax_ids` (see
+`addons/account/models/account_move.py`, lines ~605-720). Those journal
+lines (those with `tax_line_id` set and `exclude_from_invoice_tab=True`)
+are what `_compute_amount` sums into `amount_tax` / `amount_total` and what
+the totals area (`amount_by_group`) displays.
 
+`_recompute_tax_lines` only runs when at least one line has
+`recompute_tax_line = True`, a flag set by the native
+`_onchange_mark_recompute_taxes` (which watches **only** `tax_ids`).
+
+This module therefore:
+1. Adds an `@api.onchange('tax2_ids')` that sets
+   `recompute_tax_line = True` so the chain triggers when Tax 2 changes.
+2. Overrides `_recompute_tax_lines` to temporarily expose
+   `tax_ids | tax2_ids` to the super call (via direct field assignment, which
+   works for NewId/cache records as well as persisted records). The original
+   `tax_ids` is restored in a `try/finally`.
+3. Overrides `_get_price_total_and_subtotal` so the per-line `price_total`
+   shown in the row also reflects Tax 2.
+
+After every recomputation `tax_ids` is restored, so:
 - The "Taxes" column on the invoice form never shows Tax 2.
 - The "Tax 2" column never shows Tax 1.
 - Existing invoices keep their original `tax_ids` and get an empty `tax2_ids`.
