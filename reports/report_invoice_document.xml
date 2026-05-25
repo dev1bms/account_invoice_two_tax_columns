@@ -14,16 +14,15 @@
               name="Invoice Two Tax Columns">
 
         <!-- HEADER: Add "Tax 2" column after Taxes column -->
-        <!-- Use the specific th name that exists in Odoo 14 -->
         <xpath expr="//th[@name='th_taxes']" position="after">
             <th name="th_tax2" class="text-right">
                 <span>Tax 2</span>
             </th>
         </xpath>
 
-        <!-- BODY: Add Tax 2 cell after Taxes cell -->
-        <!-- Use the specific td name that exists in Odoo 14 -->
-        <xpath expr="//td[@name='account_invoice_line_taxes']" position="after">
+        <!-- BODY: Add Tax 2 cell after the taxes cell -->
+        <!-- Find the td that contains a span with t-esc referencing tax_ids -->
+        <xpath expr="//tbody//td[.//span[contains(@t-esc, 'tax_ids')]]" position="after">
             <td name="account_invoice_line_tax2" class="text-right">
                 <t t-if="line.display_type == 'product' or not line.display_type">
                     <t t-if="line.tax2_ids">
