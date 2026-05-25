@@ -67,7 +67,9 @@ class TestInvoiceTwoTaxColumns(TransactionCase):
     def _create_invoice(self, line_taxes_list):
         """Create invoice with specified taxes per line.
 
-        line_taxes_list: list of tuples (tax1_ids, tax2_ids)
+        line_taxes_list: list of tuples (tax_ids, tax2_ids)
+        - tax_ids: Tax 1 (native field)
+        - tax2_ids: Tax 2 (custom field)
         """
         invoice = self.env['account.move'].create({
             'move_type': 'out_invoice',
@@ -79,7 +81,7 @@ class TestInvoiceTwoTaxColumns(TransactionCase):
                     'name': f'Line {i+1}',
                     'quantity': 1,
                     'price_unit': 100.0,
-                    'tax1_ids': [(6, 0, t1_ids.ids if t1_ids else [])],
+                    'tax_ids': [(6, 0, t1_ids.ids if t1_ids else [])],
                     'tax2_ids': [(6, 0, t2_ids.ids if t2_ids else [])],
                 }) for i, (t1_ids, t2_ids) in enumerate(line_taxes_list)
             ],
@@ -87,54 +89,53 @@ class TestInvoiceTwoTaxColumns(TransactionCase):
         return invoice
 
     def test_01_line_with_tax1_only(self):
-        """Test: Line with Tax 1 only (15%)."""
+        """Test: Line with Tax 1 (tax_ids) only (15%)."""
         invoice = self._create_invoice([(self.tax_15, None)])
         line = invoice.invoice_line_ids[0]
 
-        # tax1_ids should contain Tax 1
-        self.assertIn(self.tax_15, line.tax1_ids)
+        # tax_ids should contain Tax 1
+        self.assertIn(self.tax_15, line.tax_ids)
         # tax2_ids should be empty
         self.assertFalse(line.tax2_ids)
-        # tax_ids (effective) should contain Tax 1
-        self.assertIn(self.tax_15, line.tax_ids)
-        # Verify computation
+        # Verify computation: 100 + 15% = 115
         invoice.action_post()
-        self.assertEqual(invoice.amount_total, 115.0)  # 100 + 15%
+        self.assertEqual(invoice.amount_total, 115.0)
 
     def test_02_line_with_tax2_only(self):
-        """Test: Line with Tax 2 only (2.1%)."""
+        """Test: Line with Tax 2 (tax2_ids) only (2.1%)."""
         invoice = self._create_invoice([(None, self.tax_21)])
         line = invoice.invoice_line_ids[0]
 
-        # tax1_ids should be empty
-        self.assertFalse(line.tax1_ids)
+        # tax_ids (Tax 1) should be empty
+        self.assertFalse(line.tax_ids)
         # tax2_ids should contain Tax 2
         self.assertIn(self.tax_21, line.tax2_ids)
-        # tax_ids (effective) should also contain Tax 2 (merged)
-        self.assertIn(self.tax_21, line.tax_ids)
-        # Verify computation
+        # Tax computation override should include tax2_ids
+        computed_taxes = line._get_computed_taxes()
+        self.assertIn(self.tax_21, computed_taxes)
+        # Verify computation: 100 + 2.1% = 102.1
         invoice.action_post()
-        self.assertAlmostEqual(invoice.amount_total, 102.1, places=1)  # 100 + 2.1%
+        self.assertAlmostEqual(invoice.amount_total, 102.1, places=1)
 
     def test_03_line_with_tax1_and_tax2(self):
-        """Test: Line with Tax 1 (15%) + Tax 2 (2.1%)."""
+        """Test: Line with Tax 1 (tax_ids: 15%) + Tax 2 (tax2_ids: 2.1%)."""
         invoice = self._create_invoice([(self.tax_15, self.tax_21)])
         line = invoice.invoice_line_ids[0]
 
-        # tax1_ids should have Tax 1
-        self.assertIn(self.tax_15, line.tax1_ids)
+        # tax_ids should have Tax 1
+        self.assertIn(self.tax_15, line.tax_ids)
         # tax2_ids should have Tax 2
         self.assertIn(self.tax_21, line.tax2_ids)
-        # tax_ids (effective) should contain both
-        self.assertEqual(len(line.tax_ids), 2)
-        self.assertIn(self.tax_15, line.tax_ids)
-        self.assertIn(self.tax_21, line.tax_ids)
+        # Tax computation override should include both
+        computed_taxes = line._get_computed_taxes()
+        self.assertIn(self.tax_15, computed_taxes)
+        self.assertIn(self.tax_21, computed_taxes)
         # Verify computation: 100 + 15% + 2.1% = 117.1
         invoice.action_post()
         self.assertAlmostEqual(invoice.amount_total, 117.1, places=1)
 
     def test_04_invoice_without_tax2(self):
-        """Test: Invoice without Tax 2 on any line."""
+        """Test: Invoice without Tax 2 on any line (only Tax 1 / tax_ids)."""
         invoice = self._create_invoice([
             (self.tax_15, None),
             (self.tax_5, None),
@@ -144,7 +145,7 @@ class TestInvoiceTwoTaxColumns(TransactionCase):
         for line in invoice.invoice_line_ids:
             self.assertFalse(line.tax2_ids)
 
-        # Verify totals
+        # Verify totals: behaves like standard Odoo
         invoice.action_post()
         # Line 1: 100 + 15% = 115
         # Line 2: 100 + 5% = 105
@@ -154,22 +155,21 @@ class TestInvoiceTwoTaxColumns(TransactionCase):
     def test_05_mixed_invoice_lines(self):
         """Test: Mixed invoice with Tax 1 only, Tax 2 only, and both."""
         invoice = self._create_invoice([
-            (self.tax_15, None),           # Line 1: Tax 1 only
-            (None, self.tax_21),           # Line 2: Tax 2 only
+            (self.tax_15, None),           # Line 1: Tax 1 only (tax_ids)
+            (None, self.tax_21),           # Line 2: Tax 2 only (tax2_ids)
             (self.tax_15, self.tax_21),   # Line 3: Both
         ])
 
         lines = invoice.invoice_line_ids
         # Line 1: Tax 1 only
-        self.assertIn(self.tax_15, lines[0].tax1_ids)
+        self.assertIn(self.tax_15, lines[0].tax_ids)
         self.assertFalse(lines[0].tax2_ids)
         # Line 2: Tax 2 only
-        self.assertFalse(lines[1].tax1_ids)
+        self.assertFalse(lines[1].tax_ids)
         self.assertIn(self.tax_21, lines[1].tax2_ids)
-        # Line 3: Both (tax1_ids has 15%, tax2_ids has 2.1%)
-        self.assertIn(self.tax_15, lines[2].tax1_ids)
+        # Line 3: Both
+        self.assertIn(self.tax_15, lines[2].tax_ids)
         self.assertIn(self.tax_21, lines[2].tax2_ids)
-        self.assertEqual(len(lines[2].tax_ids), 2)  # Effective taxes
 
         # Post and verify totals
         invoice.action_post()
@@ -205,51 +205,43 @@ class TestInvoiceTwoTaxColumns(TransactionCase):
             line.write({'tax2_ids': [(6, 0, [self.tax_21.id])]})
 
     def test_08_prevent_duplicate_tax_in_both_columns(self):
-        """Test: Same tax cannot be selected in both Tax 1 and Tax 2 columns."""
+        """Test: Same tax cannot be selected in both Tax 1 (tax_ids) and Tax 2 (tax2_ids)."""
         # Create with duplicate via ORM (should be caught by constraint)
         with self.assertRaises(ValidationError):
             self._create_invoice([(self.tax_15, self.tax_15)])
 
     def test_09_tax2_preserved_when_tax1_changes(self):
-        """Test: Tax 2 is preserved when user changes Tax 1."""
+        """Test: Tax 2 is preserved when user changes Tax 1 (tax_ids)."""
         invoice = self._create_invoice([(self.tax_15, self.tax_21)])
         line = invoice.invoice_line_ids[0]
 
         # Change Tax 1 to different tax
-        line.write({'tax1_ids': [(6, 0, [self.tax_5.id])]})
+        line.write({'tax_ids': [(6, 0, [self.tax_5.id])]})
 
         # Tax 2 should still be present
         self.assertIn(self.tax_21, line.tax2_ids)
-        self.assertIn(self.tax_21, line.tax_ids)
         # New Tax 1 should be present
-        self.assertIn(self.tax_5, line.tax1_ids)
         self.assertIn(self.tax_5, line.tax_ids)
-        self.assertEqual(len(line.tax_ids), 2)  # Tax 5 + Tax 21
 
-    def test_10_removing_tax2_updates_tax_ids(self):
-        """Test: Removing Tax 2 also removes it from effective tax_ids."""
+    def test_10_removing_tax2_keeps_tax1(self):
+        """Test: Removing Tax 2 keeps Tax 1 unchanged."""
         invoice = self._create_invoice([(self.tax_15, self.tax_21)])
         line = invoice.invoice_line_ids[0]
-
-        self.assertEqual(len(line.tax_ids), 2)  # Both taxes in effective field
 
         # Remove Tax 2
         line.write({'tax2_ids': [(5, 0, 0)]})
 
-        # Tax 2 should be gone from both fields
+        # Tax 2 should be gone, Tax 1 should remain
         self.assertFalse(line.tax2_ids)
-        self.assertNotIn(self.tax_21, line.tax_ids)
-        self.assertEqual(len(line.tax_ids), 1)  # Only Tax 1 remains
+        self.assertIn(self.tax_15, line.tax_ids)
 
-    def test_11_no_duplicate_taxes_in_combined_tax_ids(self):
-        """Test: Combined tax_ids never contains duplicates even if logic runs twice."""
+    def test_11_computed_taxes_include_both(self):
+        """Test: _get_computed_taxes() returns union of tax_ids and tax2_ids."""
         invoice = self._create_invoice([(self.tax_15, self.tax_21)])
         line = invoice.invoice_line_ids[0]
 
-        # Force sync to run again
-        line._sync_to_tax_ids()
-
-        # Check for duplicates
-        tax_ids_list = line.tax_ids.ids
-        self.assertEqual(len(tax_ids_list), len(set(tax_ids_list)))
-        self.assertEqual(len(line.tax_ids), 2)
+        # Verify computed taxes include both
+        computed_taxes = line._get_computed_taxes()
+        self.assertIn(self.tax_15, computed_taxes)
+        self.assertIn(self.tax_21, computed_taxes)
+        self.assertEqual(len(computed_taxes), 2)

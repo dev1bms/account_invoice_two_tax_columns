@@ -5,46 +5,46 @@
 
 ## Overview
 
-This Odoo 14 module adds a second tax column (Tax 2) to customer invoice lines and the invoice PDF report. Both Tax 1 and Tax 2 are fully functional `account.tax` records that flow through Odoo's native tax engine.
+This Odoo 14 module adds a second tax column (Tax 2) to customer invoice lines and the invoice PDF report. Tax 1 remains the native `account.move.line.tax_ids` field with standard Odoo behavior. Tax 2 is an additional `tax2_ids` field computed alongside Tax 1.
 
 ## Key Features
 
-- **Two editable tax columns** on invoice lines: "Tax 1" and "Tax 2"
-- **Native Odoo tax computation** - Both taxes merged into hidden `tax_ids` field
-- **Clean separation** - `tax1_ids` and `tax2_ids` are UI fields; `tax_ids` is effective/backend
-- **Automatic synchronization** - Changes to either column immediately reflected in accounting
-- **Posted invoice protection** - Taxes cannot be modified on posted invoices
-- **Duplicate prevention** - Same tax cannot be selected in both columns
-- **PDF report** - Shows separate Tax 1 and Tax 2 columns
+- **Tax 1** = Native `tax_ids` field (unchanged Odoo behavior, visible as "Taxes")
+- **Tax 2** = Additional `tax2_ids` field (new column, separate selection)
+- **Tax computation override** - Odoo calculates both Tax 1 and Tax 2 together
+- **Posted invoice protection** - Cannot modify taxes on posted invoices
+- **Duplicate prevention** - Same tax cannot be in both columns
+- **PDF report** - Shows both Tax 1 (from tax_ids) and Tax 2 (from tax2_ids)
 - **Safe inheritance** - Preserves Studio customizations on invoice reports
 
 ## Architecture
 
-### Three-Field Design
+### Two-Column Design
 ```
-┌─────────────────────────────────────────────────────────┐
-│  UI Layer (User Visible)                                │
-│  ├─ tax1_ids (Tax 1 column) - Many2many to account.tax │
-│  └─ tax2_ids (Tax 2 column) - Many2many to account.tax │
-├─────────────────────────────────────────────────────────┤
-│  Backend Layer (Odoo Engine)                            │
-│  └─ tax_ids (Effective) = tax1_ids + tax2_ids          │
-│     Native field used by Odoo for tax computation      │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  UI Layer (User Visible)                                       │
+│  ├─ tax_ids (Tax 1 / "Taxes") - Native Odoo field             │
+│  └─ tax2_ids (Tax 2) - Additional Many2many to account.tax    │
+├──────────────────────────────────────────────────────────────┤
+│  Tax Computation Override                                      │
+│  └─ _get_computed_taxes() returns: tax_ids ∪ tax2_ids       │
+│     Both tax groups calculated by Odoo natively              │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ### Data Flow
 ```
-User changes Tax 1 (tax1_ids) ──┐
-                                ├──→ _sync_to_tax_ids() ──→ tax_ids (effective)
-User changes Tax 2 (tax2_ids) ──┘
+User selects Tax 1 (tax_ids) ──┐
+                               ├──→ _get_computed_taxes() ──→ Odoo Tax Engine
+User selects Tax 2 (tax2_ids) ──┘      (returns union of both)
 ```
 
-The sync ensures:
-- `tax_ids` always contains the union of `tax1_ids` + `tax2_ids`
-- No duplicate taxes ever exist in `tax_ids`
+The tax computation override ensures:
+- Tax 1 (`tax_ids`) behaves exactly like standard Odoo
+- Tax 2 (`tax2_ids`) is calculated separately but included in totals
+- Both appear separately in the PDF
 - Posted invoices are protected from modification
-- Constraint prevents same tax in both `tax1_ids` and `tax2_ids`
+- Constraint prevents same tax in both columns
 
 ## Installation
 

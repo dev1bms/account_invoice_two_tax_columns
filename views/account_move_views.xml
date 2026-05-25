@@ -4,10 +4,9 @@
     <!--
         Customer Invoice Form: Two Tax Columns Design
         ================================================
-        - Hide native tax_ids field (it's the effective/backend field)
-        - Add tax1_ids as "Tax 1" column (UI field)
-        - Add tax2_ids as "Tax 2" column (UI field)
-        - Both UI fields sync to tax_ids via model logic
+        - Keep native tax_ids field visible as "Tax 1" / "Taxes"
+        - Add tax2_ids as "Tax 2" column beside it
+        - Tax computation override includes both in calculations
     -->
     <record id="view_move_form_inherit_tax2" model="ir.ui.view">
         <field name="name">account.move.form.inherit.tax2</field>
@@ -15,28 +14,10 @@
         <field name="inherit_id" ref="account.view_move_form"/>
         <field name="arch" type="xml">
 
-            <!-- Invoice Line Tree: Replace tax_ids with tax1_ids + tax2_ids -->
-            <!-- 1. Hide the native tax_ids field (it's still used by Odoo engine) -->
+            <!-- Invoice Line Tree: Add Tax 2 column after tax_ids -->
             <xpath expr="//field[@name='invoice_line_ids']/tree/field[@name='tax_ids']"
-                   position="attributes">
-                <attribute name="invisible">1</attribute>
-            </xpath>
-
-            <!-- 2. Add Tax 1 field (tax1_ids) where tax_ids was -->
-            <xpath expr="//field[@name='invoice_line_ids']/tree/field[@name='tax_ids'][@invisible='1']"
                    position="after">
                 <field name="parent_type_tax_use_filter" invisible="1"/>
-                <field name="tax1_ids"
-                       string="Tax 1"
-                       widget="many2many_tags"
-                       options="{'no_create': True}"
-                       context="{'default_type_tax_use': parent_type_tax_use_filter}"
-                       domain="[('type_tax_use','=', parent_type_tax_use_filter), ('company_id','=', company_id)]"/>
-            </xpath>
-
-            <!-- 3. Add Tax 2 field after Tax 1 -->
-            <xpath expr="//field[@name='invoice_line_ids']/tree/field[@name='tax1_ids']"
-                   position="after">
                 <field name="tax2_ids"
                        string="Tax 2"
                        widget="many2many_tags"
@@ -45,24 +26,10 @@
                        domain="[('type_tax_use','=', parent_type_tax_use_filter), ('company_id','=', company_id)]"/>
             </xpath>
 
-            <!-- Journal Items (line_ids) Tree: Same treatment for consistency -->
+            <!-- Journal Items (line_ids) Tree: Add Tax 2 as optional column -->
             <xpath expr="//field[@name='line_ids']/tree/field[@name='tax_ids']"
-                   position="attributes">
-                <attribute name="invisible">1</attribute>
-            </xpath>
-
-            <xpath expr="//field[@name='line_ids']/tree/field[@name='tax_ids'][@invisible='1']"
                    position="after">
                 <field name="parent_type_tax_use_filter" invisible="1"/>
-                <field name="tax1_ids"
-                       string="Tax 1"
-                       widget="many2many_tags"
-                       options="{'no_create': True}"
-                       optional="hide"/>
-            </xpath>
-
-            <xpath expr="//field[@name='line_ids']/tree/field[@name='tax1_ids']"
-                   position="after">
                 <field name="tax2_ids"
                        string="Tax 2"
                        widget="many2many_tags"
