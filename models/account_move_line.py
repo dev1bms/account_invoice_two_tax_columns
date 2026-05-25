@@ -222,7 +222,7 @@ class AccountMoveLine(models.Model):
 class AccountMove(models.Model):
     _inherit = 'account.move'
 
-    def _recompute_tax_lines(self, recompute_tax_base_amount=False, tax_rep_lines_to_recompute=None):
+    def _recompute_tax_lines(self, **kwargs):
         """Override tax line recomputation to handle Tax 2 properly.
 
         This ensures Tax 2 is included in the tax calculation while keeping
@@ -236,11 +236,8 @@ class AccountMove(models.Model):
             effective = (line.tax_ids | line.tax2_ids).sorted(key=lambda t: t.sequence)
             line.sudo().write({'tax_ids': [(6, 0, effective.ids)]})
 
-        # Call super to compute with merged taxes
-        result = super(AccountMove, self)._recompute_tax_lines(
-            recompute_tax_base_amount=recompute_tax_base_amount,
-            tax_rep_lines_to_recompute=tax_rep_lines_to_recompute
-        )
+        # Call super to compute with merged taxes - pass all kwargs
+        result = super(AccountMove, self)._recompute_tax_lines(**kwargs)
 
         # Restore original tax_ids (Tax 1 only) for clean UI display
         for line_id, tax_ids in original_taxes.items():
