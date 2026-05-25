@@ -5,41 +5,39 @@
         Invoice PDF: Two Tax Columns
         =============================
         Design:
-        - Original tax_ids column is hidden (it's the effective/backend field)
-        - We show two columns: Tax 1 (from tax1_ids) and Tax 2 (from tax2_ids)
+        - Rename original Taxes column to "Tax 1" and show tax1_ids
+        - Add "Tax 2" column after Tax 1 showing tax2_ids
         - Both are native account.tax records handled by Odoo's tax engine
-
-        XPath targets:
-        - th[@name='th_taxes'] - Original Taxes header (we replace its content)
-        - td[@name='account_invoice_line_taxes'] - Original Taxes cells
     -->
     <template id="report_invoice_document_inherit_tax2"
               inherit_id="account.report_invoice_document"
               name="Invoice Two Tax Columns">
 
-        <!-- HEADER: Replace original "Taxes" header with "Tax 1", add "Tax 2" after -->
-        <xpath expr="//table[@name='invoice_line_table']//thead//th[@name='th_taxes']"
+        <!-- HEADER 1: Rename original Taxes header to "Tax 1" -->
+        <xpath expr="//table[@name='invoice_line_table']//thead//th[@name='th_taxes']/span"
                position="replace">
-            <th name="th_tax1" class="text-right">
-                <span>Tax 1</span>
-            </th>
+            <span>Tax 1</span>
+        </xpath>
+
+        <!-- HEADER 2: Add "Tax 2" column after Tax 1 -->
+        <xpath expr="//table[@name='invoice_line_table']//thead//th[@name='th_taxes']"
+               position="after">
             <th name="th_tax2" class="text-right">
                 <span>Tax 2</span>
             </th>
         </xpath>
 
-        <!-- BODY: Replace original Taxes cell with Tax 1 + Tax 2 cells -->
-        <xpath expr="//table[@name='invoice_line_table']//tbody//td[@name='account_invoice_line_taxes']"
+        <!-- BODY 1: Modify original taxes cell to show tax1_ids instead of tax_ids -->
+        <xpath expr="//table[@name='invoice_line_table']//tbody//td[@name='account_invoice_line_taxes']/span"
                position="replace">
-            <!-- Tax 1 Column -->
-            <td name="account_invoice_line_tax1" class="text-right">
-                <t t-if="line.display_type == 'product' or not line.display_type">
-                    <t t-if="line.tax1_ids">
-                        <span t-esc="', '.join([(t.description or t.name) for t in line.tax1_ids])"/>
-                    </t>
-                </t>
-            </td>
-            <!-- Tax 2 Column -->
+            <t t-if="line.tax1_ids">
+                <span t-esc="', '.join([(t.description or t.name) for t in line.tax1_ids])"/>
+            </t>
+        </xpath>
+
+        <!-- BODY 2: Add Tax 2 cell after Tax 1 cell -->
+        <xpath expr="//table[@name='invoice_line_table']//tbody//td[@name='account_invoice_line_taxes']"
+               position="after">
             <td name="account_invoice_line_tax2" class="text-right">
                 <t t-if="line.display_type == 'product' or not line.display_type">
                     <t t-if="line.tax2_ids">
