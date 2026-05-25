@@ -19,32 +19,54 @@ This Odoo 14 module adds a second tax column (Tax 2) to customer invoice lines a
 
 ## Architecture
 
-### Two-Column Design
+### Robust Two-Column Design with Temporary Merge
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  UI Layer (User Visible)                                       │
-│  ├─ tax_ids (Tax 1 / "Taxes") - Native Odoo field             │
-│  └─ tax2_ids (Tax 2) - Additional Many2many to account.tax    │
-├──────────────────────────────────────────────────────────────┤
-│  Tax Computation Override                                      │
-│  └─ _get_computed_taxes() returns: tax_ids ∪ tax2_ids       │
-│     Both tax groups calculated by Odoo natively              │
-└──────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│  UI Layer (User Visible)                                              │
+│  ├─ tax_ids (Tax 1 / "Taxes") - Native Odoo field                    │
+│  └─ tax2_ids (Tax 2) - Additional Many2many to account.tax           │
+├─────────────────────────────────────────────────────────────────────┤
+│  Tax Computation (Backend)                                          │
+│  ├─ _recompute_tax_lines() temporarily merges tax2_ids into        │
+│  │  tax_ids for calculation                                         │
+│  ├─ Odoo computes totals with merged taxes (Tax 1 + Tax 2)         │
+│  └─ tax_ids restored to Tax 1 only after computation                │
+│     (keeps UI clean: Tax 1 column shows only Tax 1 taxes)           │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Data Flow
 ```
-User selects Tax 1 (tax_ids) ──┐
-                               ├──→ _get_computed_taxes() ──→ Odoo Tax Engine
-User selects Tax 2 (tax2_ids) ──┘      (returns union of both)
+During Tax Computation:
+tax_ids (Tax 1) ──┐
+                  ├──→ Temporarily Merge ──→ Odoo Tax Engine
+                  │                        (calculates both)
+tax2_ids (Tax 2) ──┘                           │
+                                               ↓
+                                     Journal Entries Totals
+                                               │
+After Computation:                              │
+tax_ids restored to Tax 1 only ◄───────────────┘
+(UI shows Tax 1 and Tax 2 separately)
 ```
 
-The tax computation override ensures:
-- Tax 1 (`tax_ids`) behaves exactly like standard Odoo
-- Tax 2 (`tax2_ids`) is calculated separately but included in totals
-- Both appear separately in the PDF
-- Posted invoices are protected from modification
-- Constraint prevents same tax in both columns
+### Why Temporary Merge?
+Odoo's tax computation engine only processes the native `tax_ids` field. To include
+Tax 2 in calculations while keeping the UI clean (showing Tax 1 and Tax 2 in separate
+columns), we:
+
+1. **Before computation**: Merge `tax2_ids` into `tax_ids` temporarily
+2. **During computation**: Odoo calculates totals with both taxes
+3. **After computation**: Restore `tax_ids` to contain only Tax 1
+4. **UI Display**: `tax_ids` shows Tax 1, `tax2_ids` shows Tax 2 separately
+5. **PDF**: Both columns display correctly from their respective fields
+
+This ensures:
+- ✅ Tax 2 is included in invoice totals and journal entries
+- ✅ Tax 1 and Tax 2 appear in separate UI columns
+- ✅ PDF shows both columns correctly
+- ✅ Posted invoices protected from modification
+- ✅ Constraint prevents duplicate tax selection
 
 ## Installation
 
@@ -79,7 +101,7 @@ cp -r account_invoice_two_tax_columns /opt/odoo/addons/
 1. Create new Customer Invoice
 2. Add product lines
 3. For each line:
-   - **Tax 1 column** (`tax1_ids`): Select primary tax (e.g., 15% VAT)
+   - **Tax 1 column** (`tax_ids`): Select primary tax (e.g., 15% VAT)
    - **Tax 2 column** (`tax2_ids`): Optionally select secondary tax (e.g., 2.1%)
 4. Odoo automatically computes totals using the merged effective taxes (`tax_ids`)
 5. Post invoice - journal entries include both tax amounts
@@ -137,21 +159,16 @@ account_invoice_two_tax_columns/
 
 ### Constraints & Validation
 
-**ValidationError** (`@api.constrains('tax1_ids', 'tax2_ids')`) when:
+**ValidationError** (`@api.constrains('tax_ids', 'tax2_ids')`) when:
 - Same tax selected in both Tax 1 and Tax 2 columns
-- Checks `tax1_ids` vs `tax2_ids` (NOT vs `tax_ids`)
+- Checks `tax_ids` vs `tax2_ids`
 
 **UserError** when:
-- Attempting to modify `tax1_ids`, `tax2_ids`, or `tax_ids` on posted invoice
+- Attempting to modify `tax_ids` or `tax2_ids` on posted invoice
 
 ### Important Design Note
 
-The constraint `_check_no_duplicate_taxes()` validates that no tax exists in both `tax1_ids` and `tax2_ids`. This is correct because:
-- `tax1_ids` = UI field for Tax 1 column
-- `tax2_ids` = UI field for Tax 2 column  
-- `tax_ids` = Effective merged field (always contains taxes from both columns)
-
-If we checked `tax_ids` vs `tax2_ids`, every valid invoice with Tax 2 would fail validation since `tax_ids` must contain the Tax 2 taxes!
+The constraint `_check_no_duplicate_taxes()` validates that no tax exists in both `tax_ids` (Tax 1) and `tax2_ids` (Tax 2).
 
 ### Security
 
@@ -163,9 +180,9 @@ Posted invoices (`state = 'posted'`) are protected from tax modifications:
 ### PDF Report
 
 The report inherits from `account.report_invoice_document`:
-- Replaces original single "Taxes" column with two columns:
-  - "Tax 1" showing `tax1_ids`
-  - "Tax 2" showing `tax2_ids`
+- Adds "Tax 2" column beside "Taxes" column:
+  - "Taxes" shows `tax_ids` (Tax 1, native)
+  - "Tax 2" shows `tax2_ids`
 - Shows tax name/description per line from respective fields
 - Empty cell when line has no tax in that column
 - Preserves existing Studio customizations

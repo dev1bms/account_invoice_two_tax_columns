@@ -35,7 +35,8 @@
    - Total = 102.1 (100 + 2.1%)
 6. Save draft
 
-**Design Verification**: Tax 2 (`tax2_ids`) is computed via the overridden `_get_computed_taxes()` method.
+**Design Verification**: Tax 2 (`tax2_ids`) is temporarily merged into `tax_ids` during computation,
+then `tax_ids` is restored to empty (Tax 1 column stays clean).
 
 ### Test 3: Line with Tax 1 + Tax 2
 1. Create new Customer Invoice
@@ -48,10 +49,12 @@
    - Total = 117.1 (100 + 15% + 2.1%)
 6. Save draft
 
-**Design Verification**:
-- `tax_ids` contains only Tax 1 (15%)
-- `tax2_ids` contains only Tax 2 (2.1%)
-- `_get_computed_taxes()` returns union of both for Odoo calculation
+**Design Verification (Temporary Merge)**:
+- Before computation: `tax_ids` temporarily contains both 15% + 2.1%
+- During computation: Odoo calculates total with both taxes (117.1)
+- After computation: `tax_ids` restored to only 15% (Tax 1 column clean)
+- `tax2_ids` always contains 2.1% (Tax 2 column)
+- Journal entry includes both tax amounts
 
 ### Test 4: Invoice without any Tax 2
 1. Create new Customer Invoice
@@ -74,10 +77,13 @@
 1. Use invoice from Test 3 (Tax 1 + Tax 2)
 2. Click "Confirm" to post the invoice
 3. Go to Journal Entry (smart button)
-4. **Expected**: 
+4. **Expected**:
    - Journal entry contains separate lines for both Tax 1 (15%) and Tax 2 (2.1%)
-   - Tax amounts are posted to correct tax accounts
+   - Tax amounts are posted to correct tax accounts (15 + 2.1 = 17.1 total tax)
    - Total debit = Total credit
+
+**Implementation Detail**: During posting, `_recompute_tax_lines()` temporarily merges
+Tax 2 into Tax 1 for calculation, then restores Tax 1 to contain only the original taxes.
 
 ### Test 7: Cannot modify taxes on posted invoice
 1. Open the posted invoice from Test 6
