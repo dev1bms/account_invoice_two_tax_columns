@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!--
+        Invoice PDF: Two Tax Columns
+        =============================
+        Design:
+        - Original tax_ids column is hidden (it's the effective/backend field)
+        - We show two columns: Tax 1 (from tax1_ids) and Tax 2 (from tax2_ids)
+        - Both are native account.tax records handled by Odoo's tax engine
+
+        XPath targets:
+        - th[@name='th_taxes'] - Original Taxes header (we replace its content)
+        - td[@name='account_invoice_line_taxes'] - Original Taxes cells
+    -->
+    <template id="report_invoice_document_inherit_tax2"
+              inherit_id="account.report_invoice_document"
+              name="Invoice Two Tax Columns">
+
+        <!-- HEADER: Replace original "Taxes" header with "Tax 1", add "Tax 2" after -->
+        <xpath expr="//table[@name='invoice_line_table']//thead//th[@name='th_taxes']"
+               position="replace">
+            <th name="th_tax1" class="text-right">
+                <span>Tax 1</span>
+            </th>
+            <th name="th_tax2" class="text-right">
+                <span>Tax 2</span>
+            </th>
+        </xpath>
+
+        <!-- BODY: Replace original Taxes cell with Tax 1 + Tax 2 cells -->
+        <xpath expr="//table[@name='invoice_line_table']//tbody//td[@name='account_invoice_line_taxes']"
+               position="replace">
+            <!-- Tax 1 Column -->
+            <td name="account_invoice_line_tax1" class="text-right">
+                <t t-if="line.display_type == 'product' or not line.display_type">
+                    <t t-if="line.tax1_ids">
+                        <span t-esc="', '.join([(t.description or t.name) for t in line.tax1_ids])"/>
+                    </t>
+                </t>
+            </td>
+            <!-- Tax 2 Column -->
+            <td name="account_invoice_line_tax2" class="text-right">
+                <t t-if="line.display_type == 'product' or not line.display_type">
+                    <t t-if="line.tax2_ids">
+                        <span t-esc="', '.join([(t.description or t.name) for t in line.tax2_ids])"/>
+                    </t>
+                </t>
+            </td>
+        </xpath>
+
+        <!-- Fix colspan for section/note rows to account for extra column -->
+        <xpath expr="//table[@name='invoice_line_table']//tbody//td[@colspan]"
+               position="attributes">
+            <attribute name="colspan">99</attribute>
+        </xpath>
+
+    </template>
+
+</odoo>
