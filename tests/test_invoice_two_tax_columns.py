@@ -110,29 +110,27 @@ class TestInvoiceTwoTaxColumns(TransactionCase):
         self.assertFalse(line.tax_ids)
         # tax2_ids should contain Tax 2
         self.assertIn(self.tax_21, line.tax2_ids)
-        # Tax computation override should include tax2_ids
-        computed_taxes = line._get_computed_taxes()
-        self.assertIn(self.tax_21, computed_taxes)
         # Verify computation: 100 + 2.1% = 102.1
         invoice.action_post()
         self.assertAlmostEqual(invoice.amount_total, 102.1, places=1)
+        # After posting, tax_ids must still be empty (no pollution)
+        self.assertFalse(line.tax_ids)
 
     def test_03_line_with_tax1_and_tax2(self):
         """Test: Line with Tax 1 (tax_ids: 15%) + Tax 2 (tax2_ids: 2.1%)."""
         invoice = self._create_invoice([(self.tax_15, self.tax_21)])
         line = invoice.invoice_line_ids[0]
 
-        # tax_ids should have Tax 1
-        self.assertIn(self.tax_15, line.tax_ids)
-        # tax2_ids should have Tax 2
-        self.assertIn(self.tax_21, line.tax2_ids)
-        # Tax computation override should include both
-        computed_taxes = line._get_computed_taxes()
-        self.assertIn(self.tax_15, computed_taxes)
-        self.assertIn(self.tax_21, computed_taxes)
+        # tax_ids should have ONLY Tax 1
+        self.assertEqual(line.tax_ids, self.tax_15)
+        # tax2_ids should have ONLY Tax 2
+        self.assertEqual(line.tax2_ids, self.tax_21)
         # Verify computation: 100 + 15% + 2.1% = 117.1
         invoice.action_post()
         self.assertAlmostEqual(invoice.amount_total, 117.1, places=1)
+        # After posting, tax_ids must remain ONLY Tax 1 (no pollution)
+        self.assertEqual(line.tax_ids, self.tax_15)
+        self.assertEqual(line.tax2_ids, self.tax_21)
 
     def test_04_invoice_without_tax2(self):
         """Test: Invoice without Tax 2 on any line (only Tax 1 / tax_ids)."""
@@ -235,13 +233,27 @@ class TestInvoiceTwoTaxColumns(TransactionCase):
         self.assertFalse(line.tax2_ids)
         self.assertIn(self.tax_15, line.tax_ids)
 
-    def test_11_computed_taxes_include_both(self):
-        """Test: _get_computed_taxes() returns union of tax_ids and tax2_ids."""
+    def test_11_tax_ids_stays_clean_after_compute(self):
+        """Test: tax_ids must contain ONLY Tax 1 after every compute/post."""
         invoice = self._create_invoice([(self.tax_15, self.tax_21)])
         line = invoice.invoice_line_ids[0]
 
-        # Verify computed taxes include both
-        computed_taxes = line._get_computed_taxes()
-        self.assertIn(self.tax_15, computed_taxes)
-        self.assertIn(self.tax_21, computed_taxes)
-        self.assertEqual(len(computed_taxes), 2)
+        # Before posting
+        self.assertEqual(line.tax_ids, self.tax_15)
+        self.assertEqual(line.tax2_ids, self.tax_21)
+
+        # After posting
+        invoice.action_post()
+        self.assertEqual(line.tax_ids, self.tax_15)
+        self.assertEqual(line.tax2_ids, self.tax_21)
+
+        # Total must include both
+        self.assertAlmostEqual(invoice.amount_total, 117.1, places=2)
+
+    def test_12_price_total_includes_tax2(self):
+        """Test: line.price_total includes Tax 2 amount."""
+        invoice = self._create_invoice([(self.tax_15, self.tax_21)])
+        line = invoice.invoice_line_ids[0]
+        # price_subtotal = 100, price_total should = 100 + 15 + 2.1 = 117.1
+        self.assertAlmostEqual(line.price_subtotal, 100.0, places=2)
+        self.assertAlmostEqual(line.price_total, 117.1, places=2)
